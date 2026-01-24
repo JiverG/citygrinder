@@ -43,6 +43,7 @@
                 streets: true,
                 buildings: true,
                 walls: true,
+                citadel: true,
                 bridges: true,
                 labels: true,
                 pois: true,
@@ -544,6 +545,7 @@
             if (this.layers.bridges) this.drawBridges();
             if (this.layers.buildings) this.drawBuildings();
             if (this.layers.walls) this.drawWalls();
+            if (this.layers.citadel) this.drawCitadel();
             if (this.layers.pois) this.drawPOIs();
             if (this.layers.labels) this.drawLabels();
 
@@ -1135,6 +1137,95 @@
 
                     ctx.fillRect(x + nx * 3 - 2, y + ny * 3 - 2, 4, 4);
                 }
+            }
+        }
+
+        /**
+         * Draw citadel (inner castle/keep)
+         */
+        drawCitadel() {
+            if (!this.city.citadel) return;
+
+            const ctx = this.ctx;
+            const citadel = this.city.citadel;
+
+            // Draw citadel wall shadow
+            if (this.style.shadows && citadel.wallPath) {
+                ctx.save();
+                ctx.translate(3, 3);
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+                ctx.lineWidth = 6;
+                ctx.lineCap = 'square';
+                ctx.lineJoin = 'miter';
+
+                ctx.beginPath();
+                citadel.wallPath.forEach((p, i) => {
+                    if (i === 0) ctx.moveTo(p.x, p.y);
+                    else ctx.lineTo(p.x, p.y);
+                });
+                ctx.closePath();
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Draw citadel inner wall
+            if (citadel.wallPath) {
+                // Wall base (darker)
+                ctx.strokeStyle = this.colors.wallStroke;
+                ctx.lineWidth = 5;
+                ctx.lineCap = 'square';
+                ctx.lineJoin = 'miter';
+
+                ctx.beginPath();
+                citadel.wallPath.forEach((p, i) => {
+                    if (i === 0) ctx.moveTo(p.x, p.y);
+                    else ctx.lineTo(p.x, p.y);
+                });
+                ctx.closePath();
+                ctx.stroke();
+
+                // Wall top (lighter)
+                ctx.strokeStyle = this.colors.wall;
+                ctx.lineWidth = 3;
+
+                ctx.beginPath();
+                citadel.wallPath.forEach((p, i) => {
+                    if (i === 0) ctx.moveTo(p.x, p.y);
+                    else ctx.lineTo(p.x, p.y);
+                });
+                ctx.closePath();
+                ctx.stroke();
+            }
+
+            // Draw citadel towers
+            if (citadel.towers) {
+                citadel.towers.forEach(tower => {
+                    const radius = tower.radius || 6;
+
+                    // Tower shadow
+                    if (this.style.shadows) {
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+                        ctx.beginPath();
+                        ctx.arc(tower.x + 2, tower.y + 2, radius + 1, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+
+                    // Tower base
+                    ctx.fillStyle = this.colors.tower;
+                    ctx.strokeStyle = this.colors.wallStroke;
+                    ctx.lineWidth = 1;
+
+                    ctx.beginPath();
+                    ctx.arc(tower.x, tower.y, radius + 1, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Tower top
+                    ctx.fillStyle = this.colors.wall;
+                    ctx.beginPath();
+                    ctx.arc(tower.x, tower.y, radius - 1, 0, Math.PI * 2);
+                    ctx.fill();
+                });
             }
         }
 

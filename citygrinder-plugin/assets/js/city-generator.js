@@ -146,6 +146,8 @@
                 streets: [],
                 buildings: [],
                 walls: null,
+                citadel: null,
+                suburbs: [],
                 water: null,
                 bridges: [],
                 pois: [],
@@ -155,11 +157,25 @@
             // Generation pipeline
             this.generateTerrain();
             this.generateDistricts();
-            this.generateStreets();
-            this.generateBuildings();
 
+            // Generate walls before streets so streets can connect to gates
             if (this.config.hasWalls) {
                 this.generateWalls();
+            }
+
+            this.generateStreets();
+
+            // Generate central citadel (castle/keep)
+            if (this.config.sizeClass !== 'hamlet') {
+                this.generateCitadel();
+            }
+
+            // Generate buildings inside walls
+            this.generateBuildings();
+
+            // Generate suburb buildings outside walls
+            if (this.config.hasWalls && this.config.sizeClass !== 'hamlet') {
+                this.generateSuburbs();
             }
 
             if (this.city.water && this.city.water.type === 'river') {
@@ -912,131 +928,169 @@
         // =====================================================================
 
         /**
-         * Generate street network
+         * Generate street network - organic radial pattern like medieval cities
          */
         generateStreets() {
             this.city.streets = [];
+            const bounds = this.city.bounds;
+            const center = { x: bounds.centerX, y: bounds.centerY };
 
-            // Generate main roads (MST-based)
-            this.generateMainRoads();
+            // Generate radial main roads from center
+            this.generateRadialRoads(center, bounds);
 
-            // Generate secondary streets
+            // Generate ring roads at different distances
+            this.generateRingRoads(center, bounds);
+
+            // Generate connecting streets
+            this.generateConnectingStreets();
+
+            // Generate secondary streets within districts
             this.generateSecondaryStreets();
 
-            // Generate alleys
+            // Generate alleys for density
             this.generateAlleys();
         }
 
         /**
-         * Generate main roads using Minimum Spanning Tree
+         * Generate radial roads emanating from city center
+         * @param {Object} center
+         * @param {Object} bounds
          */
-        generateMainRoads() {
-            const districts = this.city.districts;
-            if (districts.length < 2) return;
+        generateRadialRoads(center, bounds) {
+            // Number of radial roads based on city size
+            const radialCounts = {
+                hamlet: 4,
+                village: 5,
+                town: 6,
+                city: 8,
+                metropolis: 10
+            };
+            const numRadials = radialCounts[this.config.sizeClass] || 6;
+            const maxRadius = Math.min(bounds.width, bounds.height) / 2 - bounds.padding;
 
-            // Build complete graph of district connections
-            const edges = [];
-            for (let i = 0; i < districts.length; i++) {
-                for (let j = i + 1; j < districts.length; j++) {
-                    const dist = Math.hypot(
-                        districts[i].center.x - districts[j].center.x,
-                        districts[i].center.y - districts[j].center.y
-                    );
-                    edges.push({ i, j, dist });
+            for (let i = 0; i < numRadials; i++) {
+                const baseAngle = (i / numRadials) * Math.PI * 2;
+                // Add slight randomness to angle for organic feel
+                const angle = baseAngle + this.randomFloat(-0.15, 0.15);
+
+                // Generate curved radial road with multiple segments
+                const points = [{ ...center }];
+                const segments = this.randomInt(4, 7);
+
+                for (let j = 1; j <= segments; j++) {
+                    const t = j / segments;
+                    const dist = t * maxRadius;
+                    // Add perpendicular wobble for organic curves
+                    const wobble = this.randomFloat(-15, 15) * Math.sin(t * Math.PI);
+                    const perpAngle = angle + Math.PI / 2;
+
+                    points.push({
+                        x: center.x + Math.cos(angle) * dist + Math.cos(perpAngle) * wobble,
+                        y: center.y + Math.sin(angle) * dist + Math.sin(perpAngle) * wobble
+                    });
                 }
-            }
-
-            // Sort by distance
-            edges.sort((a, b) => a.dist - b.dist);
-
-            // Build MST using Kruskal's algorithm
-            const parent = districts.map((_, i) => i);
-            const find = (x) => parent[x] === x ? x : (parent[x] = find(parent[x]));
-            const union = (x, y) => { parent[find(x)] = find(y); };
-
-            const mstEdges = [];
-            for (const edge of edges) {
-                if (find(edge.i) !== find(edge.j)) {
-                    union(edge.i, edge.j);
-                    mstEdges.push(edge);
-                }
-            }
-
-            // Add some extra connections for redundancy
-            const extraCount = Math.floor(districts.length * 0.3);
-            let added = 0;
-            for (const edge of edges) {
-                if (added >= extraCount) break;
-                if (!mstEdges.some(e => (e.i === edge.i && e.j === edge.j))) {
-                    if (edge.dist < this.city.bounds.width * 0.5) {
-                        mstEdges.push(edge);
-                        added++;
-                    }
-                }
-            }
-
-            // Create road segments
-            for (const edge of mstEdges) {
-                const p1 = districts[edge.i].center;
-                const p2 = districts[edge.j].center;
-
-                // Add slight curve to roads
-                const midX = (p1.x + p2.x) / 2 + this.randomFloat(-20, 20);
-                const midY = (p1.y + p2.y) / 2 + this.randomFloat(-20, 20);
 
                 this.city.streets.push({
                     type: 'main',
-                    points: [p1, { x: midX, y: midY }, p2],
-                    width: this.randomInt(8, 12),
-                    fromDistrict: edge.i,
-                    toDistrict: edge.j
+                    points: points,
+                    width: this.randomInt(6, 10),
+                    isRadial: true,
+                    angle: angle
                 });
-            }
-
-            // Add roads to gates if walls exist
-            if (this.config.hasWalls) {
-                this.addGateRoads();
             }
         }
 
         /**
-         * Add roads connecting to gates
+         * Generate concentric ring roads
+         * @param {Object} center
+         * @param {Object} bounds
          */
-        addGateRoads() {
-            const bounds = this.city.bounds;
-            const center = { x: bounds.centerX, y: bounds.centerY };
-            const margin = bounds.padding;
+        generateRingRoads(center, bounds) {
+            const maxRadius = Math.min(bounds.width, bounds.height) / 2 - bounds.padding;
 
-            // Gate positions
-            const gatePositions = [
-                { x: bounds.centerX, y: margin, direction: 'north' },
-                { x: bounds.centerX, y: bounds.height - margin, direction: 'south' },
-                { x: margin, y: bounds.centerY, direction: 'west' },
-                { x: bounds.width - margin, y: bounds.centerY, direction: 'east' }
-            ];
+            // Number of rings based on city size
+            const ringCounts = {
+                hamlet: 1,
+                village: 2,
+                town: 3,
+                city: 4,
+                metropolis: 5
+            };
+            const numRings = ringCounts[this.config.sizeClass] || 3;
 
-            // Connect each gate to nearest district center or city center
-            gatePositions.forEach(gate => {
-                // Find nearest district
-                let nearest = center;
-                let nearestDist = Math.hypot(gate.x - center.x, gate.y - center.y);
+            for (let r = 1; r <= numRings; r++) {
+                const radius = (r / (numRings + 1)) * maxRadius;
+                const segments = this.randomInt(16, 24);
+                const points = [];
 
-                this.city.districts.forEach(d => {
-                    const dist = Math.hypot(gate.x - d.center.x, gate.y - d.center.y);
-                    if (dist < nearestDist) {
-                        nearest = d.center;
-                        nearestDist = dist;
-                    }
-                });
+                for (let i = 0; i <= segments; i++) {
+                    const angle = (i / segments) * Math.PI * 2;
+                    // Add wobble for organic feel
+                    const wobbleRadius = radius + this.randomFloat(-8, 8);
+
+                    points.push({
+                        x: center.x + Math.cos(angle) * wobbleRadius,
+                        y: center.y + Math.sin(angle) * wobbleRadius
+                    });
+                }
 
                 this.city.streets.push({
-                    type: 'main',
-                    points: [gate, nearest],
-                    width: 10,
-                    isGateRoad: true,
-                    direction: gate.direction
+                    type: r === numRings ? 'main' : 'secondary',
+                    points: points,
+                    width: r === numRings ? this.randomInt(5, 8) : this.randomInt(3, 5),
+                    isRing: true,
+                    ringIndex: r
                 });
-            });
+            }
+        }
+
+        /**
+         * Generate connecting streets between radials and rings
+         */
+        generateConnectingStreets() {
+            const bounds = this.city.bounds;
+            const center = { x: bounds.centerX, y: bounds.centerY };
+            const maxRadius = Math.min(bounds.width, bounds.height) / 2 - bounds.padding;
+
+            // Add random connecting streets
+            const numConnectors = {
+                hamlet: 8,
+                village: 15,
+                town: 25,
+                city: 40,
+                metropolis: 60
+            };
+            const count = numConnectors[this.config.sizeClass] || 25;
+
+            for (let i = 0; i < count; i++) {
+                const angle1 = this.random() * Math.PI * 2;
+                const angle2 = angle1 + this.randomFloat(0.2, 0.8);
+                const dist = this.randomFloat(0.2, 0.85) * maxRadius;
+
+                const start = {
+                    x: center.x + Math.cos(angle1) * dist,
+                    y: center.y + Math.sin(angle1) * dist
+                };
+
+                const end = {
+                    x: center.x + Math.cos(angle2) * dist,
+                    y: center.y + Math.sin(angle2) * dist
+                };
+
+                // Add midpoint for slight curve
+                const midAngle = (angle1 + angle2) / 2;
+                const midDist = dist + this.randomFloat(-10, 10);
+                const mid = {
+                    x: center.x + Math.cos(midAngle) * midDist,
+                    y: center.y + Math.sin(midAngle) * midDist
+                };
+
+                this.city.streets.push({
+                    type: 'secondary',
+                    points: [start, mid, end],
+                    width: this.randomInt(3, 5)
+                });
+            }
         }
 
         /**
@@ -1044,16 +1098,22 @@
          */
         generateSecondaryStreets() {
             this.city.districts.forEach(district => {
-                const count = this.randomInt(2, 5);
+                // More streets for denser network
+                const count = this.randomInt(8, 15);
 
                 for (let i = 0; i < count; i++) {
-                    // Generate street within district
                     const angle = this.random() * Math.PI * 2;
-                    const length = this.randomFloat(40, 100);
+                    const length = this.randomFloat(30, 80);
 
                     const start = {
-                        x: district.center.x + this.randomFloat(-40, 40),
-                        y: district.center.y + this.randomFloat(-40, 40)
+                        x: district.center.x + this.randomFloat(-50, 50),
+                        y: district.center.y + this.randomFloat(-50, 50)
+                    };
+
+                    // Add curve point
+                    const mid = {
+                        x: start.x + Math.cos(angle) * length * 0.5 + this.randomFloat(-10, 10),
+                        y: start.y + Math.sin(angle) * length * 0.5 + this.randomFloat(-10, 10)
                     };
 
                     const end = {
@@ -1063,8 +1123,8 @@
 
                     this.city.streets.push({
                         type: 'secondary',
-                        points: [start, end],
-                        width: this.randomInt(4, 6),
+                        points: [start, mid, end],
+                        width: this.randomInt(3, 5),
                         districtId: district.id
                     });
                 }
@@ -1072,22 +1132,30 @@
         }
 
         /**
-         * Generate small alleys
+         * Generate small alleys for dense urban feel
          */
         generateAlleys() {
             this.city.districts.forEach(district => {
-                // More alleys in slums and docks
-                const count = ['slums', 'docks', 'craftsmen'].includes(district.type)
-                    ? this.randomInt(3, 6)
-                    : this.randomInt(1, 3);
+                // More alleys for density
+                const baseCounts = {
+                    slums: this.randomInt(15, 25),
+                    docks: this.randomInt(10, 18),
+                    craftsmen: this.randomInt(10, 16),
+                    market: this.randomInt(8, 14),
+                    residential: this.randomInt(8, 14),
+                    noble: this.randomInt(4, 8),
+                    temple: this.randomInt(4, 8),
+                    military: this.randomInt(4, 8)
+                };
+                const count = baseCounts[district.type] || this.randomInt(6, 12);
 
                 for (let i = 0; i < count; i++) {
                     const angle = this.random() * Math.PI * 2;
-                    const length = this.randomFloat(20, 50);
+                    const length = this.randomFloat(15, 40);
 
                     const start = {
-                        x: district.center.x + this.randomFloat(-60, 60),
-                        y: district.center.y + this.randomFloat(-60, 60)
+                        x: district.center.x + this.randomFloat(-70, 70),
+                        y: district.center.y + this.randomFloat(-70, 70)
                     };
 
                     const end = {
@@ -1098,7 +1166,7 @@
                     this.city.streets.push({
                         type: 'alley',
                         points: [start, end],
-                        width: 2,
+                        width: this.randomInt(1, 3),
                         districtId: district.id
                     });
                 }
@@ -1128,30 +1196,31 @@
          * @returns {number}
          */
         getBuildingCount(district) {
+            // Dramatically increased building counts for dense cities
             const baseCounts = {
-                hamlet: 8,
-                village: 20,
-                town: 40,
-                city: 70,
-                metropolis: 120
+                hamlet: 40,
+                village: 100,
+                town: 200,
+                city: 350,
+                metropolis: 600
             };
 
-            const base = baseCounts[this.config.sizeClass] || 40;
+            const base = baseCounts[this.config.sizeClass] || 200;
 
             // Adjust based on district type
             const multipliers = {
-                market: 1.0,
-                residential: 1.2,
-                noble: 0.6,
-                craftsmen: 1.0,
-                temple: 0.5,
-                docks: 0.9,
-                slums: 1.5,
-                military: 0.5
+                market: 1.2,
+                residential: 1.5,
+                noble: 0.7,
+                craftsmen: 1.3,
+                temple: 0.6,
+                docks: 1.0,
+                slums: 2.0,
+                military: 0.6
             };
 
             const mult = multipliers[district.type] || 1.0;
-            return Math.floor(base * mult * (0.8 + this.random() * 0.4));
+            return Math.floor(base * mult * (0.9 + this.random() * 0.2));
         }
 
         /**
@@ -1182,22 +1251,33 @@
          * @returns {Object|null}
          */
         generateBuilding(district, existing) {
-            // Try multiple positions to avoid overlap
-            for (let attempt = 0; attempt < 15; attempt++) {
-                // Random position within district polygon
-                const pos = this.randomPointInPolygon(district.polygon, district.center);
+            // Try multiple positions - increased attempts for denser placement
+            for (let attempt = 0; attempt < 50; attempt++) {
+                let pos;
+
+                // 70% chance to place along a street for organic feel
+                if (this.random() < 0.7 && this.city.streets.length > 0) {
+                    pos = this.getPositionAlongStreet(district);
+                } else {
+                    pos = this.randomPointInPolygon(district.polygon, district.center);
+                }
+
                 if (!pos) continue;
 
                 // Skip if in water
                 if (this.isInWater(pos)) continue;
 
-                // Building size based on district type
+                // Skip if outside walls (for walled cities)
+                if (this.city.walls && !this.isInsideWalls(pos)) continue;
+
+                // Building size based on district type - slightly smaller for density
                 const size = this.getBuildingSize(district.type);
 
-                // Check for overlap
+                // Check for overlap with smaller spacing for dense packing
+                const minSpacing = 1; // Reduced from 3
                 const overlaps = existing.some(b => {
                     const dist = Math.hypot(pos.x - b.x, pos.y - b.y);
-                    return dist < (size.width + b.width) / 2 + 3;
+                    return dist < (size.width + b.width) / 2 + minSpacing;
                 });
 
                 if (overlaps) continue;
@@ -1205,7 +1285,7 @@
                 // Building type
                 const type = this.getBuildingType(district.type);
 
-                // Rotation - align to nearby streets or random
+                // Rotation - align to nearby streets
                 const rotation = this.getBuildingRotation(pos);
 
                 return {
@@ -1221,6 +1301,58 @@
             }
 
             return null;
+        }
+
+        /**
+         * Get position along a street for building placement
+         * @param {Object} district
+         * @returns {Object|null}
+         */
+        getPositionAlongStreet(district) {
+            // Find streets in or near this district
+            const relevantStreets = this.city.streets.filter(s =>
+                s.districtId === district.id ||
+                s.fromDistrict === district.id ||
+                s.toDistrict === district.id ||
+                s.type === 'main'
+            );
+
+            if (relevantStreets.length === 0) {
+                return this.randomPointInPolygon(district.polygon, district.center);
+            }
+
+            const street = this.randomChoice(relevantStreets);
+            const points = street.points;
+
+            // Pick random segment
+            const segIdx = this.randomInt(0, points.length - 2);
+            const p1 = points[segIdx];
+            const p2 = points[segIdx + 1];
+
+            // Random position along segment
+            const t = this.random();
+            const streetX = p1.x + (p2.x - p1.x) * t;
+            const streetY = p1.y + (p2.y - p1.y) * t;
+
+            // Offset perpendicular to street
+            const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+            const perpAngle = angle + (this.random() > 0.5 ? Math.PI/2 : -Math.PI/2);
+            const offset = this.randomFloat(8, 25); // Distance from street center
+
+            return {
+                x: streetX + Math.cos(perpAngle) * offset,
+                y: streetY + Math.sin(perpAngle) * offset
+            };
+        }
+
+        /**
+         * Check if point is inside the city walls
+         * @param {Object} point
+         * @returns {boolean}
+         */
+        isInsideWalls(point) {
+            if (!this.city.walls || !this.city.walls.path) return true;
+            return this.pointInPolygon(point, this.city.walls.path);
         }
 
         /**
@@ -1302,19 +1434,20 @@
 
         /**
          * Get building size based on district type
+         * Smaller sizes for denser packing like original generator
          * @param {string} districtType
          * @returns {Object}
          */
         getBuildingSize(districtType) {
             const sizes = {
-                market: { width: [10, 18], height: [10, 18] },
-                residential: { width: [8, 14], height: [8, 14] },
-                noble: { width: [15, 30], height: [15, 30] },
-                craftsmen: { width: [10, 20], height: [8, 16] },
-                temple: { width: [12, 25], height: [12, 25] },
-                docks: { width: [12, 25], height: [8, 15] },
-                slums: { width: [5, 10], height: [5, 10] },
-                military: { width: [15, 30], height: [10, 20] }
+                market: { width: [5, 10], height: [5, 10] },
+                residential: { width: [4, 8], height: [4, 8] },
+                noble: { width: [8, 16], height: [8, 16] },
+                craftsmen: { width: [5, 12], height: [4, 10] },
+                temple: { width: [8, 15], height: [8, 15] },
+                docks: { width: [6, 14], height: [4, 10] },
+                slums: { width: [3, 6], height: [3, 6] },
+                military: { width: [8, 16], height: [6, 12] }
             };
 
             const range = sizes[districtType] || sizes.residential;
@@ -1407,86 +1540,56 @@
         // =====================================================================
 
         /**
-         * Generate city walls
+         * Generate city walls - organic circular like medieval cities
          */
         generateWalls() {
             const bounds = this.city.bounds;
             const padding = bounds.padding;
 
-            // Generate wall path
-            let path;
-            if (this.config.gridStyle === 'radial' || this.random() > 0.5) {
-                path = this.generateRoundWalls(bounds, padding);
-            } else {
-                path = this.generateRectangularWalls(bounds, padding);
-            }
+            // Always use organic circular walls (like original generator)
+            const path = this.generateOrganicCircularWalls(bounds, padding);
 
             // Generate gates
             const gates = this.generateGates(path, bounds);
 
-            // Generate towers
+            // Generate many towers (like original)
             const towers = this.generateTowers(path, gates);
 
             this.city.walls = {
                 path: path,
                 gates: gates,
                 towers: towers,
-                thickness: this.randomInt(5, 8)
+                thickness: this.randomInt(3, 5)
             };
         }
 
         /**
-         * Generate roughly rectangular walls
+         * Generate organic circular walls with natural variation
          * @param {Object} bounds
          * @param {number} padding
          * @returns {Array}
          */
-        generateRectangularWalls(bounds, padding) {
-            const path = [];
-            const corners = [
-                { x: padding, y: padding },
-                { x: bounds.width - padding, y: padding },
-                { x: bounds.width - padding, y: bounds.height - padding },
-                { x: padding, y: bounds.height - padding }
-            ];
-
-            // Add points along each side with slight variation
-            for (let i = 0; i < 4; i++) {
-                const start = corners[i];
-                const end = corners[(i + 1) % 4];
-
-                path.push(start);
-
-                // Add intermediate points
-                const segments = this.randomInt(2, 4);
-                for (let j = 1; j < segments; j++) {
-                    const t = j / segments;
-                    path.push({
-                        x: start.x + (end.x - start.x) * t + this.randomFloat(-15, 15),
-                        y: start.y + (end.y - start.y) * t + this.randomFloat(-15, 15)
-                    });
-                }
-            }
-
-            return path;
-        }
-
-        /**
-         * Generate roughly circular walls
-         * @param {Object} bounds
-         * @param {number} padding
-         * @returns {Array}
-         */
-        generateRoundWalls(bounds, padding) {
+        generateOrganicCircularWalls(bounds, padding) {
             const path = [];
             const cx = bounds.centerX;
             const cy = bounds.centerY;
             const baseRadius = Math.min(bounds.width, bounds.height) / 2 - padding;
 
-            const segments = this.randomInt(12, 20);
+            // Many more segments for smoother, more organic walls
+            const segments = this.randomInt(32, 48);
+
+            // Use multiple noise frequencies for organic variation
             for (let i = 0; i < segments; i++) {
                 const angle = (i / segments) * Math.PI * 2;
-                const r = baseRadius * (0.9 + this.random() * 0.2);
+
+                // Multi-frequency noise for organic shape
+                const noise1 = Math.sin(angle * 3 + this.random() * 0.5) * 0.08;
+                const noise2 = Math.sin(angle * 5 + this.random() * 0.8) * 0.04;
+                const noise3 = Math.sin(angle * 7 + this.random() * 1.2) * 0.02;
+                const randomNoise = this.randomFloat(-0.03, 0.03);
+
+                const radiusVariation = 1 + noise1 + noise2 + noise3 + randomNoise;
+                const r = baseRadius * radiusVariation;
 
                 path.push({
                     x: cx + Math.cos(angle) * r,
@@ -1498,7 +1601,7 @@
         }
 
         /**
-         * Generate gates
+         * Generate gates at cardinal directions
          * @param {Array} path
          * @param {Object} bounds
          * @returns {Array}
@@ -1543,7 +1646,7 @@
         }
 
         /**
-         * Generate towers
+         * Generate many towers along walls (like original generator)
          * @param {Array} path
          * @param {Array} gates
          * @returns {Array}
@@ -1552,22 +1655,25 @@
             const towers = [];
             const gateIndices = new Set(gates.map(g => g.pathIndex));
 
-            // Towers at regular intervals
-            const towerInterval = Math.floor(path.length / this.randomInt(6, 10));
+            // Tower at every 2-4 wall segments for dense coverage
+            const towerInterval = this.randomInt(2, 4);
 
             path.forEach((point, i) => {
-                // Corner towers (at every towerInterval)
-                if (i % towerInterval === 0 && !gateIndices.has(i)) {
+                // Skip gate positions
+                if (gateIndices.has(i)) return;
+
+                // Regular wall towers
+                if (i % towerInterval === 0) {
                     towers.push({
                         x: point.x,
                         y: point.y,
-                        type: 'corner',
-                        radius: this.randomInt(8, 12)
+                        type: 'wall',
+                        radius: this.randomInt(4, 7)
                     });
                 }
             });
 
-            // Gate towers (flanking each gate)
+            // Gate towers (larger, flanking each gate)
             gates.forEach(gate => {
                 const idx = gate.pathIndex;
                 const prevIdx = (idx - 1 + path.length) % path.length;
@@ -1584,24 +1690,276 @@
 
                 if (len1 > 0) {
                     towers.push({
-                        x: gate.x + (dx1 / len1) * 15,
-                        y: gate.y + (dy1 / len1) * 15,
+                        x: gate.x + (dx1 / len1) * 10,
+                        y: gate.y + (dy1 / len1) * 10,
                         type: 'gate',
-                        radius: 10
+                        radius: this.randomInt(6, 9)
                     });
                 }
 
                 if (len2 > 0) {
                     towers.push({
-                        x: gate.x + (dx2 / len2) * 15,
-                        y: gate.y + (dy2 / len2) * 15,
+                        x: gate.x + (dx2 / len2) * 10,
+                        y: gate.y + (dy2 / len2) * 10,
                         type: 'gate',
-                        radius: 10
+                        radius: this.randomInt(6, 9)
                     });
                 }
             });
 
             return towers;
+        }
+
+        // =====================================================================
+        // CITADEL GENERATION
+        // =====================================================================
+
+        /**
+         * Generate central citadel (castle/keep) at city center
+         */
+        generateCitadel() {
+            const bounds = this.city.bounds;
+            const cx = bounds.centerX;
+            const cy = bounds.centerY;
+
+            // Citadel size based on city size
+            const sizes = {
+                village: { radius: 25, wallRadius: 35 },
+                town: { radius: 35, wallRadius: 50 },
+                city: { radius: 50, wallRadius: 70 },
+                metropolis: { radius: 70, wallRadius: 95 }
+            };
+            const size = sizes[this.config.sizeClass] || sizes.town;
+
+            // Generate citadel wall (inner keep)
+            const wallPath = [];
+            const wallSegments = this.randomInt(8, 12);
+            for (let i = 0; i < wallSegments; i++) {
+                const angle = (i / wallSegments) * Math.PI * 2;
+                const r = size.wallRadius * (0.9 + this.random() * 0.2);
+                wallPath.push({
+                    x: cx + Math.cos(angle) * r,
+                    y: cy + Math.sin(angle) * r
+                });
+            }
+
+            // Generate citadel towers
+            const towers = wallPath.map((p, i) => ({
+                x: p.x,
+                y: p.y,
+                type: 'citadel',
+                radius: this.randomInt(5, 8)
+            }));
+
+            // Main keep building
+            const keepBuildings = [];
+
+            // Central keep tower
+            keepBuildings.push({
+                x: cx,
+                y: cy,
+                width: size.radius * 0.6,
+                height: size.radius * 0.6,
+                rotation: this.random() * Math.PI * 0.25,
+                type: 'keep',
+                isCitadel: true
+            });
+
+            // Additional buildings inside citadel
+            const innerBuildingCount = this.randomInt(3, 7);
+            for (let i = 0; i < innerBuildingCount; i++) {
+                const angle = this.random() * Math.PI * 2;
+                const dist = this.randomFloat(size.radius * 0.4, size.wallRadius * 0.7);
+                const bSize = this.randomInt(8, 15);
+
+                keepBuildings.push({
+                    x: cx + Math.cos(angle) * dist,
+                    y: cy + Math.sin(angle) * dist,
+                    width: bSize,
+                    height: bSize * this.randomFloat(0.7, 1.3),
+                    rotation: angle + Math.PI / 2 + this.randomFloat(-0.2, 0.2),
+                    type: this.randomChoice(['barracks', 'chapel', 'armory', 'hall', 'stable']),
+                    isCitadel: true
+                });
+            }
+
+            this.city.citadel = {
+                x: cx,
+                y: cy,
+                radius: size.radius,
+                wallRadius: size.wallRadius,
+                wallPath: wallPath,
+                towers: towers,
+                buildings: keepBuildings
+            };
+
+            // Add citadel buildings to main building list
+            keepBuildings.forEach(b => {
+                b.districtId = 0; // Central district
+                b.footprint = this.generateBuildingFootprint(b.x, b.y, b.width, b.height, b.rotation);
+                this.city.buildings.push(b);
+            });
+        }
+
+        // =====================================================================
+        // SUBURBS GENERATION
+        // =====================================================================
+
+        /**
+         * Generate suburb buildings outside the city walls
+         */
+        generateSuburbs() {
+            const bounds = this.city.bounds;
+            const center = { x: bounds.centerX, y: bounds.centerY };
+
+            if (!this.city.walls || !this.city.walls.path) return;
+
+            // Number of suburb buildings based on city size
+            const suburbCounts = {
+                village: 20,
+                town: 50,
+                city: 120,
+                metropolis: 250
+            };
+            const count = suburbCounts[this.config.sizeClass] || 50;
+
+            const wallPath = this.city.walls.path;
+            const gates = this.city.walls.gates;
+
+            // Generate suburb clusters near each gate
+            gates.forEach(gate => {
+                const clusterCount = Math.floor(count / gates.length);
+                this.generateSuburbCluster(gate, clusterCount, wallPath, bounds);
+            });
+
+            // Generate scattered suburbs around the walls
+            const scatteredCount = Math.floor(count * 0.3);
+            for (let i = 0; i < scatteredCount; i++) {
+                const building = this.generateSuburbBuilding(wallPath, bounds, center);
+                if (building) {
+                    this.city.suburbs.push(building);
+                    this.city.buildings.push(building);
+                }
+            }
+        }
+
+        /**
+         * Generate a cluster of suburb buildings near a gate
+         * @param {Object} gate
+         * @param {number} count
+         * @param {Array} wallPath
+         * @param {Object} bounds
+         */
+        generateSuburbCluster(gate, count, wallPath, bounds) {
+            const placed = [];
+
+            // Direction away from city center
+            const dx = gate.x - bounds.centerX;
+            const dy = gate.y - bounds.centerY;
+            const len = Math.hypot(dx, dy);
+            const dirX = dx / len;
+            const dirY = dy / len;
+
+            for (let i = 0; i < count; i++) {
+                // Position extending from gate
+                const dist = this.randomFloat(15, 80);
+                const spread = this.randomFloat(-50, 50);
+                const perpX = -dirY;
+                const perpY = dirX;
+
+                const x = gate.x + dirX * dist + perpX * spread;
+                const y = gate.y + dirY * dist + perpY * spread;
+
+                // Skip if inside walls or outside bounds
+                if (this.isInsideWalls({ x, y })) continue;
+                if (x < 5 || x > bounds.width - 5 || y < 5 || y > bounds.height - 5) continue;
+
+                const size = {
+                    width: this.randomInt(4, 10),
+                    height: this.randomInt(4, 10)
+                };
+
+                // Check overlap with other suburb buildings
+                const overlaps = placed.some(b => {
+                    const d = Math.hypot(x - b.x, y - b.y);
+                    return d < (size.width + b.width) / 2 + 2;
+                });
+
+                if (overlaps) continue;
+
+                const building = {
+                    x: x,
+                    y: y,
+                    width: size.width,
+                    height: size.height,
+                    rotation: Math.atan2(dirY, dirX) + this.randomFloat(-0.3, 0.3),
+                    type: this.randomChoice(['house', 'shack', 'cottage', 'farmhouse', 'barn']),
+                    isSuburb: true,
+                    districtId: -1
+                };
+                building.footprint = this.generateBuildingFootprint(
+                    building.x, building.y, building.width, building.height, building.rotation
+                );
+
+                placed.push(building);
+                this.city.suburbs.push(building);
+                this.city.buildings.push(building);
+            }
+        }
+
+        /**
+         * Generate a single scattered suburb building
+         * @param {Array} wallPath
+         * @param {Object} bounds
+         * @param {Object} center
+         * @returns {Object|null}
+         */
+        generateSuburbBuilding(wallPath, bounds, center) {
+            for (let attempt = 0; attempt < 20; attempt++) {
+                // Random position outside walls
+                const angle = this.random() * Math.PI * 2;
+                const minRadius = Math.min(bounds.width, bounds.height) / 2 - bounds.padding + 10;
+                const maxRadius = Math.min(bounds.width, bounds.height) / 2 - 10;
+                const dist = this.randomFloat(minRadius, maxRadius);
+
+                const x = center.x + Math.cos(angle) * dist;
+                const y = center.y + Math.sin(angle) * dist;
+
+                // Skip if inside walls or outside bounds
+                if (this.isInsideWalls({ x, y })) continue;
+                if (x < 5 || x > bounds.width - 5 || y < 5 || y > bounds.height - 5) continue;
+
+                const size = {
+                    width: this.randomInt(3, 8),
+                    height: this.randomInt(3, 8)
+                };
+
+                // Check overlap with existing suburbs
+                const overlaps = this.city.suburbs.some(b => {
+                    const d = Math.hypot(x - b.x, y - b.y);
+                    return d < (size.width + b.width) / 2 + 2;
+                });
+
+                if (overlaps) continue;
+
+                const building = {
+                    x: x,
+                    y: y,
+                    width: size.width,
+                    height: size.height,
+                    rotation: angle + Math.PI / 2 + this.randomFloat(-0.3, 0.3),
+                    type: this.randomChoice(['shack', 'hovel', 'hut', 'tent']),
+                    isSuburb: true,
+                    districtId: -1
+                };
+                building.footprint = this.generateBuildingFootprint(
+                    building.x, building.y, building.width, building.height, building.rotation
+                );
+
+                return building;
+            }
+
+            return null;
         }
 
         // =====================================================================
