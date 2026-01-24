@@ -22,7 +22,15 @@
          */
         constructor(options = {}) {
             this.seed = options.seed || this.generateSeed();
-            this.rng = new Math.seedrandom(this.seed);
+
+            // Initialize seeded random - seedrandom extends Math with seedrandom function
+            if (typeof Math.seedrandom === 'function') {
+                this.rng = new Math.seedrandom(this.seed);
+            } else {
+                // Fallback to simple seeded random if seedrandom not loaded
+                console.warn('CityGrinder: seedrandom not loaded, using fallback');
+                this.rng = this.createFallbackRng(this.seed);
+            }
 
             this.config = {
                 cityType: options.cityType || 'town',
@@ -43,6 +51,29 @@
          */
         generateSeed() {
             return Math.random().toString(36).substring(2, 15);
+        }
+
+        /**
+         * Create a fallback seeded random generator
+         * Uses a simple mulberry32 algorithm
+         * @param {string} seed - Seed string
+         * @returns {function}
+         */
+        createFallbackRng(seed) {
+            // Convert string seed to number
+            let h = 0;
+            for (let i = 0; i < seed.length; i++) {
+                h = Math.imul(31, h) + seed.charCodeAt(i) | 0;
+            }
+
+            // Mulberry32 PRNG
+            return function() {
+                h |= 0;
+                h = h + 0x6D2B79F5 | 0;
+                let t = Math.imul(h ^ h >>> 15, 1 | h);
+                t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            };
         }
 
         /**
