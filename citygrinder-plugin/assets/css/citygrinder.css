@@ -888,6 +888,284 @@
 
 
 /* ============================================
+   HexGrinder Integration Modal
+   ============================================ */
+
+.citygrinder-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.citygrinder-modal-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(4px);
+}
+
+.citygrinder-modal-container {
+    position: relative;
+    width: 90%;
+    max-width: 420px;
+    background: var(--cg-bg);
+    border: 1px solid var(--cg-border);
+    border-radius: var(--cg-border-radius);
+    box-shadow: var(--cg-shadow-lg);
+    animation: modalSlideIn 0.2s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.citygrinder-modal-close {
+    position: absolute;
+    top: var(--cg-spacing-sm);
+    right: var(--cg-spacing-sm);
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: var(--cg-text-muted);
+    cursor: pointer;
+    padding: var(--cg-spacing-xs);
+    line-height: 1;
+    transition: color var(--cg-transition);
+}
+
+.citygrinder-modal-close:hover {
+    color: var(--cg-text);
+}
+
+.citygrinder-modal-header {
+    padding: var(--cg-spacing-lg) var(--cg-spacing-lg) var(--cg-spacing-md);
+    text-align: center;
+    border-bottom: 1px solid var(--cg-border);
+}
+
+.citygrinder-modal-title {
+    font-size: var(--cg-font-size-xl);
+    font-weight: 700;
+    color: var(--cg-text-heading);
+    margin: 0 0 var(--cg-spacing-xs);
+}
+
+.citygrinder-modal-subtitle {
+    font-size: var(--cg-font-size-sm);
+    color: var(--cg-text-muted);
+}
+
+.citygrinder-modal-body {
+    padding: var(--cg-spacing-md) var(--cg-spacing-lg);
+}
+
+.citygrinder-modal-preview {
+    margin-bottom: var(--cg-spacing-md);
+    border-radius: var(--cg-border-radius);
+    overflow: hidden;
+    border: 1px solid var(--cg-border);
+}
+
+.citygrinder-modal-preview canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.citygrinder-modal-info {}
+
+.citygrinder-info-list {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--cg-spacing-xs) var(--cg-spacing-md);
+    margin: 0;
+}
+
+.citygrinder-info-list dt {
+    color: var(--cg-text-muted);
+    font-size: var(--cg-font-size-sm);
+}
+
+.citygrinder-info-list dd {
+    color: var(--cg-text);
+    font-weight: 500;
+    margin: 0;
+}
+
+.citygrinder-prompt {
+    color: var(--cg-text-muted);
+    text-align: center;
+    margin: 0;
+    padding: var(--cg-spacing-md);
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: var(--cg-border-radius);
+}
+
+.citygrinder-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--cg-spacing-sm);
+    padding: var(--cg-spacing-md) var(--cg-spacing-lg) var(--cg-spacing-lg);
+    border-top: 1px solid var(--cg-border);
+}
+
+/* Modal open state - prevent body scroll */
+body.citygrinder-modal-open {
+    overflow: hidden;
+}
+
+
+/* ============================================
+   Loading Overlay
+   ============================================ */
+
+#citygrinder-loading {
+    position: fixed;
+    inset: 0;
+    z-index: 100001;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(26, 32, 44, 0.95);
+}
+
+.citygrinder-loading-spinner {
+    width: 60px;
+    height: 60px;
+    border: 4px solid var(--cg-border);
+    border-top-color: var(--cg-accent);
+    border-radius: 50%;
+    animation: cg-spin 0.8s linear infinite;
+}
+
+.citygrinder-loading-text {
+    margin-top: var(--cg-spacing-lg);
+    font-size: var(--cg-font-size-lg);
+    color: var(--cg-text);
+    font-weight: 500;
+}
+
+
+/* ============================================
+   Hex Preview Component
+   ============================================ */
+
+.citygrinder-hex-preview {
+    margin-top: var(--cg-spacing-sm);
+    border-radius: var(--cg-border-radius);
+    overflow: hidden;
+    border: 1px solid var(--cg-border);
+}
+
+.city-preview-canvas {
+    height: 80px;
+    background: var(--cg-bg-secondary);
+}
+
+
+/* ============================================
+   Style Selector
+   ============================================ */
+
+.citygrinder-style-selector {
+    display: flex;
+    gap: var(--cg-spacing-xs);
+}
+
+.citygrinder-style-btn {
+    padding: var(--cg-spacing-xs) var(--cg-spacing-sm);
+    font-size: var(--cg-font-size-sm);
+    background: var(--cg-bg-secondary);
+    border: 1px solid var(--cg-border);
+    border-radius: var(--cg-border-radius);
+    color: var(--cg-text-muted);
+    cursor: pointer;
+    transition: all var(--cg-transition);
+}
+
+.citygrinder-style-btn:hover {
+    background: var(--cg-primary);
+    color: var(--cg-text);
+}
+
+.citygrinder-style-btn.active {
+    background: var(--cg-accent);
+    border-color: var(--cg-accent);
+    color: #1a202c;
+}
+
+
+/* ============================================
+   Layer Toggles
+   ============================================ */
+
+.citygrinder-layer-toggles {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cg-spacing-xs);
+}
+
+.citygrinder-layer-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--cg-spacing-sm);
+    padding: var(--cg-spacing-xs) 0;
+    cursor: pointer;
+    font-size: var(--cg-font-size-sm);
+    color: var(--cg-text);
+    transition: color var(--cg-transition);
+}
+
+.citygrinder-layer-toggle:hover {
+    color: var(--cg-accent);
+}
+
+.citygrinder-layer-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.citygrinder-layer-toggle.disabled {
+    opacity: 0.5;
+    color: var(--cg-text-muted);
+}
+
+
+/* ============================================
+   Theme Badges
+   ============================================ */
+
+.citygrinder-theme-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cg-spacing-xs);
+    padding: var(--cg-spacing-xs) var(--cg-spacing-sm);
+    font-size: var(--cg-font-size-sm);
+    border-radius: 20px;
+    background: rgba(237, 137, 54, 0.2);
+    color: var(--cg-accent);
+}
+
+.citygrinder-theme-badge--hexgrinder {
+    background: rgba(99, 179, 237, 0.2);
+    color: #63b3ed;
+}
+
+
+/* ============================================
    Print Styles
    ============================================ */
 
