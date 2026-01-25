@@ -924,173 +924,200 @@
         }
 
         // =====================================================================
-        // STREET GENERATION
+        // STREET GENERATION - Based on watabouCityGrinder algorithm
         // =====================================================================
 
         /**
-         * Generate street network - organic radial pattern like medieval cities
+         * Generate street network following original watabou algorithm:
+         * 1. Main streets from gates to center plaza
+         * 2. Streets connecting district centers
+         * 3. Secondary streets within districts
+         * 4. Alleys for urban density
          */
         generateStreets() {
             this.city.streets = [];
             const bounds = this.city.bounds;
             const center = { x: bounds.centerX, y: bounds.centerY };
 
-            // Generate radial main roads from center
-            this.generateRadialRoads(center, bounds);
+            // 1. Generate main arteries from gates to center
+            this.generateGateToCenter(center, bounds);
 
-            // Generate ring roads at different distances
-            this.generateRingRoads(center, bounds);
+            // 2. Generate streets connecting district centers
+            this.generateDistrictConnections();
 
-            // Generate connecting streets
-            this.generateConnectingStreets();
-
-            // Generate secondary streets within districts
+            // 3. Generate secondary streets within districts
             this.generateSecondaryStreets();
 
-            // Generate alleys for density
+            // 4. Generate alleys for density
             this.generateAlleys();
         }
 
         /**
-         * Generate radial roads emanating from city center
+         * Generate main streets from gates to city center (like original)
          * @param {Object} center
          * @param {Object} bounds
          */
-        generateRadialRoads(center, bounds) {
-            // Number of radial roads based on city size
-            const radialCounts = {
-                hamlet: 4,
-                village: 5,
-                town: 6,
-                city: 8,
-                metropolis: 10
-            };
-            const numRadials = radialCounts[this.config.sizeClass] || 6;
-            const maxRadius = Math.min(bounds.width, bounds.height) / 2 - bounds.padding;
-
-            for (let i = 0; i < numRadials; i++) {
-                const baseAngle = (i / numRadials) * Math.PI * 2;
-                // Add slight randomness to angle for organic feel
-                const angle = baseAngle + this.randomFloat(-0.15, 0.15);
-
-                // Generate curved radial road with multiple segments
-                const points = [{ ...center }];
-                const segments = this.randomInt(4, 7);
-
-                for (let j = 1; j <= segments; j++) {
-                    const t = j / segments;
-                    const dist = t * maxRadius;
-                    // Add perpendicular wobble for organic curves
-                    const wobble = this.randomFloat(-15, 15) * Math.sin(t * Math.PI);
-                    const perpAngle = angle + Math.PI / 2;
-
-                    points.push({
-                        x: center.x + Math.cos(angle) * dist + Math.cos(perpAngle) * wobble,
-                        y: center.y + Math.sin(angle) * dist + Math.sin(perpAngle) * wobble
-                    });
-                }
-
-                this.city.streets.push({
-                    type: 'main',
-                    points: points,
-                    width: this.randomInt(6, 10),
-                    isRadial: true,
-                    angle: angle
+        generateGateToCenter(center, bounds) {
+            // If we have walls, connect gates to center
+            if (this.city.walls && this.city.walls.gates) {
+                this.city.walls.gates.forEach(gate => {
+                    const street = this.buildSmoothPath(gate, center, 'main');
+                    this.city.streets.push(street);
+                });
+            } else {
+                // No walls - create cardinal direction roads
+                const directions = [
+                    { x: bounds.padding, y: bounds.centerY },
+                    { x: bounds.width - bounds.padding, y: bounds.centerY },
+                    { x: bounds.centerX, y: bounds.padding },
+                    { x: bounds.centerX, y: bounds.height - bounds.padding }
+                ];
+                directions.forEach(edge => {
+                    const street = this.buildSmoothPath(edge, center, 'main');
+                    this.city.streets.push(street);
                 });
             }
-        }
 
-        /**
-         * Generate concentric ring roads
-         * @param {Object} center
-         * @param {Object} bounds
-         */
-        generateRingRoads(center, bounds) {
-            const maxRadius = Math.min(bounds.width, bounds.height) / 2 - bounds.padding;
-
-            // Number of rings based on city size
-            const ringCounts = {
-                hamlet: 1,
-                village: 2,
-                town: 3,
+            // Add extra radial streets for larger cities
+            const extraRadials = {
+                hamlet: 0,
+                village: 1,
+                town: 2,
                 city: 4,
-                metropolis: 5
+                metropolis: 6
             };
-            const numRings = ringCounts[this.config.sizeClass] || 3;
+            const extra = extraRadials[this.config.sizeClass] || 2;
+            const maxRadius = Math.min(bounds.width, bounds.height) / 2 - bounds.padding;
 
-            for (let r = 1; r <= numRings; r++) {
-                const radius = (r / (numRings + 1)) * maxRadius;
-                const segments = this.randomInt(16, 24);
-                const points = [];
-
-                for (let i = 0; i <= segments; i++) {
-                    const angle = (i / segments) * Math.PI * 2;
-                    // Add wobble for organic feel
-                    const wobbleRadius = radius + this.randomFloat(-8, 8);
-
-                    points.push({
-                        x: center.x + Math.cos(angle) * wobbleRadius,
-                        y: center.y + Math.sin(angle) * wobbleRadius
-                    });
-                }
-
-                this.city.streets.push({
-                    type: r === numRings ? 'main' : 'secondary',
-                    points: points,
-                    width: r === numRings ? this.randomInt(5, 8) : this.randomInt(3, 5),
-                    isRing: true,
-                    ringIndex: r
-                });
+            for (let i = 0; i < extra; i++) {
+                const angle = this.random() * Math.PI * 2;
+                const edgePoint = {
+                    x: center.x + Math.cos(angle) * maxRadius,
+                    y: center.y + Math.sin(angle) * maxRadius
+                };
+                const street = this.buildSmoothPath(edgePoint, center, 'secondary');
+                this.city.streets.push(street);
             }
         }
 
         /**
-         * Generate connecting streets between radials and rings
+         * Generate streets connecting district centers (like original topology paths)
          */
-        generateConnectingStreets() {
-            const bounds = this.city.bounds;
-            const center = { x: bounds.centerX, y: bounds.centerY };
-            const maxRadius = Math.min(bounds.width, bounds.height) / 2 - bounds.padding;
+        generateDistrictConnections() {
+            const districts = this.city.districts;
+            if (districts.length < 2) return;
 
-            // Add random connecting streets
-            const numConnectors = {
-                hamlet: 8,
-                village: 15,
-                town: 25,
-                city: 40,
-                metropolis: 60
+            // Build MST to connect all districts
+            const edges = [];
+            for (let i = 0; i < districts.length; i++) {
+                for (let j = i + 1; j < districts.length; j++) {
+                    const dist = Math.hypot(
+                        districts[i].center.x - districts[j].center.x,
+                        districts[i].center.y - districts[j].center.y
+                    );
+                    edges.push({ i, j, dist });
+                }
+            }
+            edges.sort((a, b) => a.dist - b.dist);
+
+            // Kruskal's MST
+            const parent = districts.map((_, i) => i);
+            const find = (x) => parent[x] === x ? x : (parent[x] = find(parent[x]));
+            const union = (x, y) => { parent[find(x)] = find(y); };
+
+            for (const edge of edges) {
+                if (find(edge.i) !== find(edge.j)) {
+                    union(edge.i, edge.j);
+                    const street = this.buildSmoothPath(
+                        districts[edge.i].center,
+                        districts[edge.j].center,
+                        'secondary'
+                    );
+                    this.city.streets.push(street);
+                }
+            }
+
+            // Add some extra connections for larger cities
+            const extraConnections = Math.floor(districts.length * 0.5);
+            let added = 0;
+            for (const edge of edges) {
+                if (added >= extraConnections) break;
+                if (edge.dist < this.city.bounds.width * 0.4) {
+                    // Only add if not already too connected
+                    const street = this.buildSmoothPath(
+                        districts[edge.i].center,
+                        districts[edge.j].center,
+                        'secondary'
+                    );
+                    this.city.streets.push(street);
+                    added++;
+                }
+            }
+        }
+
+        /**
+         * Build a smooth curved path between two points (like original smoothStreet)
+         * @param {Object} start
+         * @param {Object} end
+         * @param {string} type
+         * @returns {Object}
+         */
+        buildSmoothPath(start, end, type) {
+            const points = [];
+            const segments = this.randomInt(4, 8);
+            const dx = end.x - start.x;
+            const dy = end.y - start.y;
+            const length = Math.hypot(dx, dy);
+            const perpX = -dy / length;
+            const perpY = dx / length;
+
+            for (let i = 0; i <= segments; i++) {
+                const t = i / segments;
+                // Base position along line
+                let x = start.x + dx * t;
+                let y = start.y + dy * t;
+
+                // Add perpendicular wobble (larger in middle, zero at ends)
+                const wobbleAmount = Math.sin(t * Math.PI) * this.randomFloat(-20, 20);
+                x += perpX * wobbleAmount;
+                y += perpY * wobbleAmount;
+
+                points.push({ x, y });
+            }
+
+            // Smooth the path
+            const smoothed = this.smoothPath(points);
+
+            return {
+                type: type,
+                points: smoothed,
+                width: type === 'main' ? this.randomInt(5, 8) : this.randomInt(3, 5)
             };
-            const count = numConnectors[this.config.sizeClass] || 25;
+        }
 
-            for (let i = 0; i < count; i++) {
-                const angle1 = this.random() * Math.PI * 2;
-                const angle2 = angle1 + this.randomFloat(0.2, 0.8);
-                const dist = this.randomFloat(0.2, 0.85) * maxRadius;
+        /**
+         * Smooth a path by averaging adjacent points (like original smoothStreet)
+         * @param {Array} points
+         * @returns {Array}
+         */
+        smoothPath(points) {
+            if (points.length < 3) return points;
 
-                const start = {
-                    x: center.x + Math.cos(angle1) * dist,
-                    y: center.y + Math.sin(angle1) * dist
-                };
+            const smoothed = [points[0]]; // Keep first point
 
-                const end = {
-                    x: center.x + Math.cos(angle2) * dist,
-                    y: center.y + Math.sin(angle2) * dist
-                };
+            for (let i = 1; i < points.length - 1; i++) {
+                const prev = points[i - 1];
+                const curr = points[i];
+                const next = points[i + 1];
 
-                // Add midpoint for slight curve
-                const midAngle = (angle1 + angle2) / 2;
-                const midDist = dist + this.randomFloat(-10, 10);
-                const mid = {
-                    x: center.x + Math.cos(midAngle) * midDist,
-                    y: center.y + Math.sin(midAngle) * midDist
-                };
-
-                this.city.streets.push({
-                    type: 'secondary',
-                    points: [start, mid, end],
-                    width: this.randomInt(3, 5)
+                smoothed.push({
+                    x: (prev.x + curr.x * 2 + next.x) / 4,
+                    y: (prev.y + curr.y * 2 + next.y) / 4
                 });
             }
+
+            smoothed.push(points[points.length - 1]); // Keep last point
+            return smoothed;
         }
 
         /**
@@ -1098,22 +1125,16 @@
          */
         generateSecondaryStreets() {
             this.city.districts.forEach(district => {
-                // More streets for denser network
-                const count = this.randomInt(8, 15);
+                const count = this.randomInt(4, 8);
 
                 for (let i = 0; i < count; i++) {
+                    // Create streets within the district
                     const angle = this.random() * Math.PI * 2;
-                    const length = this.randomFloat(30, 80);
+                    const length = this.randomFloat(30, 70);
 
                     const start = {
-                        x: district.center.x + this.randomFloat(-50, 50),
-                        y: district.center.y + this.randomFloat(-50, 50)
-                    };
-
-                    // Add curve point
-                    const mid = {
-                        x: start.x + Math.cos(angle) * length * 0.5 + this.randomFloat(-10, 10),
-                        y: start.y + Math.sin(angle) * length * 0.5 + this.randomFloat(-10, 10)
+                        x: district.center.x + this.randomFloat(-40, 40),
+                        y: district.center.y + this.randomFloat(-40, 40)
                     };
 
                     const end = {
@@ -1121,12 +1142,9 @@
                         y: start.y + Math.sin(angle) * length
                     };
 
-                    this.city.streets.push({
-                        type: 'secondary',
-                        points: [start, mid, end],
-                        width: this.randomInt(3, 5),
-                        districtId: district.id
-                    });
+                    const street = this.buildSmoothPath(start, end, 'secondary');
+                    street.districtId = district.id;
+                    this.city.streets.push(street);
                 }
             });
         }
@@ -1136,26 +1154,25 @@
          */
         generateAlleys() {
             this.city.districts.forEach(district => {
-                // More alleys for density
                 const baseCounts = {
-                    slums: this.randomInt(15, 25),
-                    docks: this.randomInt(10, 18),
-                    craftsmen: this.randomInt(10, 16),
-                    market: this.randomInt(8, 14),
-                    residential: this.randomInt(8, 14),
-                    noble: this.randomInt(4, 8),
-                    temple: this.randomInt(4, 8),
-                    military: this.randomInt(4, 8)
+                    slums: this.randomInt(10, 18),
+                    docks: this.randomInt(8, 14),
+                    craftsmen: this.randomInt(8, 12),
+                    market: this.randomInt(6, 10),
+                    residential: this.randomInt(6, 10),
+                    noble: this.randomInt(3, 6),
+                    temple: this.randomInt(3, 6),
+                    military: this.randomInt(3, 6)
                 };
-                const count = baseCounts[district.type] || this.randomInt(6, 12);
+                const count = baseCounts[district.type] || this.randomInt(5, 10);
 
                 for (let i = 0; i < count; i++) {
                     const angle = this.random() * Math.PI * 2;
-                    const length = this.randomFloat(15, 40);
+                    const length = this.randomFloat(12, 35);
 
                     const start = {
-                        x: district.center.x + this.randomFloat(-70, 70),
-                        y: district.center.y + this.randomFloat(-70, 70)
+                        x: district.center.x + this.randomFloat(-60, 60),
+                        y: district.center.y + this.randomFloat(-60, 60)
                     };
 
                     const end = {
@@ -1166,7 +1183,7 @@
                     this.city.streets.push({
                         type: 'alley',
                         points: [start, end],
-                        width: this.randomInt(1, 3),
+                        width: this.randomInt(1, 2),
                         districtId: district.id
                     });
                 }
