@@ -1174,174 +1174,194 @@
         }
 
         // =====================================================================
-        // BUILDING GENERATION
+        // BUILDING GENERATION - Grid-based dense fill approach
         // =====================================================================
 
         /**
-         * Generate buildings
+         * Generate buildings using grid-based dense fill
+         * Buildings fill the entire area, streets are gaps between them
          */
         generateBuildings() {
             this.city.buildings = [];
+            const bounds = this.city.bounds;
 
-            this.city.districts.forEach(district => {
-                const count = this.getBuildingCount(district);
-                const buildings = this.generateDistrictBuildings(district, count);
-                this.city.buildings.push(...buildings);
-            });
+            // Grid spacing based on city size (smaller = denser)
+            const gridSpacings = {
+                hamlet: 12,
+                village: 10,
+                town: 8,
+                city: 7,
+                metropolis: 6
+            };
+            const gridSpacing = gridSpacings[this.config.sizeClass] || 8;
+
+            // Building sizes
+            const buildingSizes = {
+                hamlet: { min: 5, max: 10 },
+                village: { min: 4, max: 9 },
+                town: { min: 4, max: 8 },
+                city: { min: 3, max: 7 },
+                metropolis: { min: 3, max: 6 }
+            };
+            const sizeRange = buildingSizes[this.config.sizeClass] || { min: 4, max: 8 };
+
+            // Street width for gap calculation
+            const streetGap = {
+                main: 6,
+                secondary: 4,
+                alley: 2
+            };
+
+            // Generate grid of potential building positions
+            const padding = bounds.padding + 10;
+
+            for (let x = padding; x < bounds.width - padding; x += gridSpacing) {
+                for (let y = padding; y < bounds.height - padding; y += gridSpacing) {
+                    // Add jitter for organic feel
+                    const jitterX = this.randomFloat(-gridSpacing * 0.3, gridSpacing * 0.3);
+                    const jitterY = this.randomFloat(-gridSpacing * 0.3, gridSpacing * 0.3);
+                    const pos = { x: x + jitterX, y: y + jitterY };
+
+                    // Skip if outside walls
+                    if (this.city.walls && !this.isInsideWalls(pos)) continue;
+
+                    // Skip if in water
+                    if (this.isInWater(pos)) continue;
+
+                    // Skip if in citadel area (handled separately)
+                    if (this.city.citadel && this.isInCitadel(pos)) continue;
+
+                    // Check distance to streets - buildings line the streets
+                    const streetInfo = this.getStreetDistance(pos);
+
+                    // Skip if too close to street center (leave gap for street)
+                    if (streetInfo.distance < streetGap[streetInfo.type] || 0) continue;
+
+                    // Higher chance to place building if near a street (but not on it)
+                    const nearStreet = streetInfo.distance < 20;
+                    if (!nearStreet && this.random() > 0.7) continue; // Less density away from streets
+
+                    // Determine district for this position
+                    const district = this.findDistrictAt(pos);
+
+                    // Building size varies by district type
+                    const size = this.getGridBuildingSize(district, sizeRange);
+
+                    // Rotation - align to nearest street
+                    const rotation = streetInfo.angle + Math.PI/2 + this.randomFloat(-0.1, 0.1);
+
+                    // Check overlap with existing buildings
+                    const overlaps = this.city.buildings.some(b => {
+                        const dist = Math.hypot(pos.x - b.x, pos.y - b.y);
+                        return dist < (size.width + b.width) / 2 + 1;
+                    });
+
+                    if (overlaps) continue;
+
+                    const building = {
+                        x: pos.x,
+                        y: pos.y,
+                        width: size.width,
+                        height: size.height,
+                        rotation: rotation,
+                        type: this.getBuildingType(district ? district.type : 'residential'),
+                        districtId: district ? district.id : -1,
+                        footprint: this.generateBuildingFootprint(pos.x, pos.y, size.width, size.height, rotation)
+                    };
+
+                    this.city.buildings.push(building);
+                }
+            }
         }
 
         /**
-         * Get building count for district
-         * @param {Object} district
-         * @returns {number}
+         * Check if position is inside citadel
+         * @param {Object} pos
+         * @returns {boolean}
          */
-        getBuildingCount(district) {
-            // Dramatically increased building counts for dense cities
-            const baseCounts = {
-                hamlet: 40,
-                village: 100,
-                town: 200,
-                city: 350,
-                metropolis: 600
-            };
+        isInCitadel(pos) {
+            const citadel = this.city.citadel;
+            const dist = Math.hypot(pos.x - citadel.x, pos.y - citadel.y);
+            return dist < citadel.wallRadius + 5;
+        }
 
-            const base = baseCounts[this.config.sizeClass] || 200;
+        /**
+         * Get distance to nearest street and its info
+         * @param {Object} pos
+         * @returns {Object}
+         */
+        getStreetDistance(pos) {
+            let minDist = Infinity;
+            let streetType = 'secondary';
+            let streetAngle = 0;
 
-            // Adjust based on district type
-            const multipliers = {
-                market: 1.2,
-                residential: 1.5,
-                noble: 0.7,
-                craftsmen: 1.3,
-                temple: 0.6,
+            for (const street of this.city.streets) {
+                for (let i = 0; i < street.points.length - 1; i++) {
+                    const p1 = street.points[i];
+                    const p2 = street.points[i + 1];
+                    const dist = this.pointToLineDistance(pos, p1, p2);
+
+                    if (dist < minDist) {
+                        minDist = dist;
+                        streetType = street.type || 'secondary';
+                        streetAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                    }
+                }
+            }
+
+            return { distance: minDist, type: streetType, angle: streetAngle };
+        }
+
+        /**
+         * Find which district contains a point
+         * @param {Object} pos
+         * @returns {Object|null}
+         */
+        findDistrictAt(pos) {
+            for (const district of this.city.districts) {
+                if (district.polygon && this.pointInPolygon(pos, district.polygon)) {
+                    return district;
+                }
+            }
+            // Return closest district if not in any polygon
+            let closest = null;
+            let minDist = Infinity;
+            for (const district of this.city.districts) {
+                const dist = Math.hypot(pos.x - district.center.x, pos.y - district.center.y);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closest = district;
+                }
+            }
+            return closest;
+        }
+
+        /**
+         * Get building size for grid placement
+         * @param {Object} district
+         * @param {Object} sizeRange
+         * @returns {Object}
+         */
+        getGridBuildingSize(district, sizeRange) {
+            // Adjust size based on district type
+            const sizeMultipliers = {
+                market: 1.0,
+                residential: 0.9,
+                noble: 1.4,
+                craftsmen: 1.1,
+                temple: 1.3,
                 docks: 1.0,
-                slums: 2.0,
-                military: 0.6
+                slums: 0.7,
+                military: 1.2
             };
 
-            const mult = multipliers[district.type] || 1.0;
-            return Math.floor(base * mult * (0.9 + this.random() * 0.2));
-        }
-
-        /**
-         * Generate buildings for a district
-         * @param {Object} district
-         * @param {number} count
-         * @returns {Array}
-         */
-        generateDistrictBuildings(district, count) {
-            const buildings = [];
-            const placed = [];
-
-            for (let i = 0; i < count; i++) {
-                const building = this.generateBuilding(district, placed);
-                if (building) {
-                    buildings.push(building);
-                    placed.push(building);
-                }
-            }
-
-            return buildings;
-        }
-
-        /**
-         * Generate a single building
-         * @param {Object} district
-         * @param {Array} existing
-         * @returns {Object|null}
-         */
-        generateBuilding(district, existing) {
-            // Try multiple positions - increased attempts for denser placement
-            for (let attempt = 0; attempt < 50; attempt++) {
-                let pos;
-
-                // 70% chance to place along a street for organic feel
-                if (this.random() < 0.7 && this.city.streets.length > 0) {
-                    pos = this.getPositionAlongStreet(district);
-                } else {
-                    pos = this.randomPointInPolygon(district.polygon, district.center);
-                }
-
-                if (!pos) continue;
-
-                // Skip if in water
-                if (this.isInWater(pos)) continue;
-
-                // Skip if outside walls (for walled cities)
-                if (this.city.walls && !this.isInsideWalls(pos)) continue;
-
-                // Building size based on district type - slightly smaller for density
-                const size = this.getBuildingSize(district.type);
-
-                // Check for overlap with smaller spacing for dense packing
-                const minSpacing = 1; // Reduced from 3
-                const overlaps = existing.some(b => {
-                    const dist = Math.hypot(pos.x - b.x, pos.y - b.y);
-                    return dist < (size.width + b.width) / 2 + minSpacing;
-                });
-
-                if (overlaps) continue;
-
-                // Building type
-                const type = this.getBuildingType(district.type);
-
-                // Rotation - align to nearby streets
-                const rotation = this.getBuildingRotation(pos);
-
-                return {
-                    districtId: district.id,
-                    x: pos.x,
-                    y: pos.y,
-                    width: size.width,
-                    height: size.height,
-                    rotation: rotation,
-                    type: type,
-                    footprint: this.generateBuildingFootprint(pos.x, pos.y, size.width, size.height, rotation)
-                };
-            }
-
-            return null;
-        }
-
-        /**
-         * Get position along a street for building placement
-         * @param {Object} district
-         * @returns {Object|null}
-         */
-        getPositionAlongStreet(district) {
-            // Find streets in or near this district
-            const relevantStreets = this.city.streets.filter(s =>
-                s.districtId === district.id ||
-                s.fromDistrict === district.id ||
-                s.toDistrict === district.id ||
-                s.type === 'main'
-            );
-
-            if (relevantStreets.length === 0) {
-                return this.randomPointInPolygon(district.polygon, district.center);
-            }
-
-            const street = this.randomChoice(relevantStreets);
-            const points = street.points;
-
-            // Pick random segment
-            const segIdx = this.randomInt(0, points.length - 2);
-            const p1 = points[segIdx];
-            const p2 = points[segIdx + 1];
-
-            // Random position along segment
-            const t = this.random();
-            const streetX = p1.x + (p2.x - p1.x) * t;
-            const streetY = p1.y + (p2.y - p1.y) * t;
-
-            // Offset perpendicular to street
-            const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-            const perpAngle = angle + (this.random() > 0.5 ? Math.PI/2 : -Math.PI/2);
-            const offset = this.randomFloat(8, 25); // Distance from street center
+            const mult = sizeMultipliers[district?.type] || 1.0;
+            const baseWidth = this.randomInt(sizeRange.min, sizeRange.max);
+            const baseHeight = this.randomInt(sizeRange.min, sizeRange.max);
 
             return {
-                x: streetX + Math.cos(perpAngle) * offset,
-                y: streetY + Math.sin(perpAngle) * offset
+                width: Math.round(baseWidth * mult),
+                height: Math.round(baseHeight * mult * this.randomFloat(0.8, 1.2))
             };
         }
 
